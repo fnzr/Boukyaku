@@ -1,0 +1,51 @@
+{
+  "name": "boukyaku",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/express": "^4.17.1",
+    "@types/knex": "^0.16.1",
+    "@types/lodash": "^4.14.141",
+    "@types/node": "^12.7.8",
+    "@types/node-pg-migrate": "^2.3.1",
+    "@types/slonik": "^19.0.0",
+    "ava": "^2.4.0",
+    "ava-ts": "^0.25.2",
+    "eslint": "^6.5.0",
+    "gts": "^1.1.0",
+    "node-pg-migrate": "^3.23.1",
+    "nodemon": "^1.19.3",
+    "ts-loader": "^6.2.0",
+    "ts-node": "^8.4.1",
+    "tsconfig-paths": "^3.9.0",
+    "tsconfig-paths-webpack-plugin": "^3.2.0",
+    "typescript": "^3.6.3",
+    "webpack": "4.39.1",
+    "webpack-cli": "^3.3.9",
+    "webpack-node-externals": "^1.7.2"
+  },
+  "dependencies": {
+    "@types/cheerio": "^0.22.13",
+    "axios": "^0.19.0",
+    "cheerio": "^1.0.0-rc.3",
+    "express": "^4.17.1",
+    "knex": "^0.19.4",
+    "lodash": "^4.17.15",
+    "pg": "^7.12.1",
+    "user-agents": "^1.0.394"
+  },
+  "scripts": {
+    "fix": "gts fix",
+    "build": "webpack",
+    "serve": "webpack | nodemon ./build/index.js",
+    "run:dev": "nodemon ./build/index.js",
+    "test": "ava-ts",
+    "migrate": "ts-node node_modules/node-pg-migrate/bin/node-pg-migrate"
+  },
+  "ava": {
+    "require": [
+      "tsconfig-paths/register"
+    ]
+  }
+}
