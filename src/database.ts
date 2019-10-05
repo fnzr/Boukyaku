@@ -1,4 +1,3 @@
-require('dotenv').config()
 import knex from 'knex';
 
 export const pg = knex({
@@ -37,4 +36,16 @@ export async function insertPage(p: Page) {
     const insert = pg('page').insert(p).toString();
     const query = `${insert} ON CONFLICT DO NOTHING`;
     return pg.raw(query);
+}
+
+export async function listCovers(offset: number, limit: number) {
+    return pg.raw("SELECT g.title, CONCAT('/thumbs/', g.dir, '.', p.page_number) as url, g.category, g.length FROM gallery g JOIN page p ON g.id = p.id_gallery WHERE p.page_number = 1 ORDER BY created DESC LIMIT ? OFFSET ?;", [limit, offset])
+}
+
+export async function countGalleries(filter: string) {
+    return pg("gallery").count("id");
+}
+
+export async function getFilename(dir: string, page: number) {
+    return pg.raw("SELECT filename FROM page p JOIN gallery g ON p.id_gallery = g.id WHERE p.page_number = ? AND g.dir = ?;", [page, dir])
 }

@@ -136,6 +136,19 @@ export async function downloadImage(url: string, page: number, dir: string): Pro
     });
 }
 
+export async function saveTags(galleryId: string) {
+    const groups = groupedTags();
+    if (groups === {}) {
+        throw new Error("No tags found for gallery " + galleryId);
+    }
+    for (const [group, tags] of Object.entries(groups)) {
+        await Promise.all(tags.map(async name => {
+            const tagId = await insertTag({ group, name });
+            await insertGalleryTag(galleryId, tagId);
+        }))
+    }
+}
+
 async function saveGallery(url: string) {
     await loadURL(url);
     const gallery: GalleryInsert = {
@@ -148,12 +161,7 @@ async function saveGallery(url: string) {
         hidden: false
     }
     const galleryId = await insertGallery(gallery);
-    for (const [group, tags] of Object.entries(groupedTags())) {
-        await Promise.all(tags.map(async name => {
-            const tagId = await insertTag({ group, name });
-            await insertGalleryTag(galleryId, tagId);
-        }))
-    }
+    saveTags(galleryId);
     return [galleryId, gallery.dir]
 }
 
