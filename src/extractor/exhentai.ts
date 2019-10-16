@@ -1,12 +1,13 @@
 import _ from 'lodash';
 import fs from 'fs';
+import gm from 'gm';
 import path from 'path';
 import UserAgent from 'user-agents';
 import axios from 'axios'
 import cheerio from 'cheerio';
-import { insertGallery, insertTag, insertGalleryTag, insertPage } from '@database';
-
-let dom: CheerioStatic;
+import validUrl from 'valid-url';
+import { insertGallery, insertTag, insertGalleryTag, insertPage, pg, insertTask, TaskStatus } from '@database';
+import logger from '@logger';
 
 async function doRequest(url: string) {
     const userAgent = new UserAgent(/Chrome/);
@@ -37,28 +38,28 @@ async function requestImage(url: string) {
 
 export async function loadURL(url: string) {
     const resp = await doRequest(url);
-    dom = cheerio.load(resp.data);
+    return cheerio.load(resp.data);
 }
 
-function title() {
+function title(dom: CheerioStatic) {
     return dom("#gd2 #gn").text();
 }
 
-function category() {
+function category(dom: CheerioStatic) {
     return dom("#gdc").text();
 }
 
-function originalTitle() {
+function originalTitle(dom: CheerioStatic) {
     return dom("#gd2 #gj").text();
 }
 
-function length() {
+function length(dom: CheerioStatic) {
     const table = dom("#gdd table");
     const value = table.find("tr").eq(5).children(".gdt2").text();
     return Number(value.split(' ')[0]);
 }
 
-function groupedTags() {
+function groupedTags(dom: CheerioStatic) {
     const table = dom("#taglist table");
     const rows = table.find("tr");
     const result: { [k: string]: string[] } = {}
@@ -73,14 +74,15 @@ function groupedTags() {
     return result;
 }
 
-function pageNumber() {
+function pageNumber(dom: CheerioStatic) {
     return Number(dom("#i2 div.sn div span").text())
 }
 
-function imageURL() {
+function imageURL(dom: CheerioStatic) {
     const original = dom("#i7");
-    if (original.length > 0) {
-        return original.find("a").attr('href');
+    const a = original.find("a");
+    if (a.length > 0) {
+        return a.attr('href');
     }
     return dom("#i3 img").attr("src");
 }
@@ -94,7 +96,7 @@ function dir(url: string) {
     return `${matches[1]}.${matches[2]}`;
 }
 
-function pageURL(pageNumber: number) {
+function pageURL(dom: CheerioStatic, pageNumber: number) {
     const pagesElement = dom('#gdt')
     const pagesPerChapter = pagesElement.children().length - 1;
     let pagePosition = pageNumber % pagesPerChapter;
@@ -110,11 +112,11 @@ function pageURL(pageNumber: number) {
     return a.attr('href');
 }
 
-function nextPageURL() {
+function nextPageURL(dom: CheerioStatic) {
     return dom("#i3 a").attr("href");
 }
 
-export async function downloadImage(url: string, page: number, dir: string): Promise<string> {
+export async function downloadImage(url: string, dir: string): Promise<string> {
     const response = await requestImage(url);
     let filename: string;
     if (url.includes("fullimg.php")) {
@@ -127,17 +129,26 @@ export async function downloadImage(url: string, page: number, dir: string): Pro
     else {
         filename = _.last(url.split('/')) || "";
     }
-    const imagePath = path.join(process.env.VAULT_PATH!, dir, 'gallery');
+    const imagePath = path.join(process.env.VAULT_PATH!, dir);
     fs.mkdirSync(imagePath, { recursive: true })
     return new Promise((resolve, reject) => {
-        const file = fs.createWriteStream(path.join(imagePath, filename));
+        const fullPath = path.join(imagePath, filename);
+        const file = fs.createWriteStream(fullPath);
         response.data.pipe(file);
-        file.on("finish", () => resolve(filename));
+        file.on("finish", () => {
+            const stats = fs.statSync(fullPath);
+            if (stats["size"] === Number(response.headers['content-length']) && isValidImage(fullPath)) {
+                resolve(filename);
+            }
+            else {
+                reject(false);
+            }
+        });
     });
 }
 
-export async function saveTags(galleryId: string) {
-    const groups = groupedTags();
+export async function saveTags(dom: CheerioStatic, galleryId: string) {
+    const groups = groupedTags(dom);
     if (groups === {}) {
         throw new Error("No tags found for gallery " + galleryId);
     }
@@ -149,44 +160,104 @@ export async function saveTags(galleryId: string) {
     }
 }
 
-async function saveGallery(url: string) {
-    await loadURL(url);
+async function saveGallery(dom: CheerioStatic, url: string) {
     const gallery: GalleryInsert = {
         url,
         dir: dir(url),
-        title: title(),
-        original_title: originalTitle(),
-        length: length(),
-        category: category(),
+        title: title(dom),
+        original_title: originalTitle(dom),
+        length: length(dom),
+        category: category(dom),
         hidden: false
     }
     const galleryId = await insertGallery(gallery);
-    saveTags(galleryId);
-    return [galleryId, gallery.dir]
+    saveTags(dom, galleryId);
+    return [galleryId, gallery.dir, gallery.length.toString()]
 }
 
-export async function downloadGallery(url: string, metadataOnly = false) {
-    const [galleryId, dir] = await saveGallery(url);
-    if (metadataOnly) {
-        return;
+export async function pageExists(galleryId: string, pageNumber: number) {
+    const query = 'SELECT g.dir, p.filename FROM gallery g JOIN page p ON g.id = p.id_gallery WHERE id_gallery = ? AND page_number = ?;';
+    try {
+        const { dir, filename } = (await pg.raw(query, [galleryId, pageNumber])).rows[0];
+        const filepath = path.join(process.env.VAULT_PATH!, dir, filename);
+        return isValidImage(filepath);
+    } catch {
+        return false;
     }
-    console.log(dir);
-    let pageNumber = 1;
-    let currentURL = pageURL(pageNumber);
-    while (true) {
-        await loadURL(currentURL);
-        const filename = await downloadImage(imageURL(), pageNumber++, dir);
-        await insertPage({
-            id_gallery: Number(galleryId),
-            page_number: pageNumber,
-            filename
-        })
-        const nextURL = nextPageURL();
-        if (nextURL.length === 0 || nextURL === currentURL) {
-            break;
-        }
-        currentURL = nextURL;
-        setTimeout(() => { }, 2000);
-    }
+}
 
+async function downloadPage(dom: CheerioStatic, idGallery: string, pageNumber: number, dir: string) {
+    try {
+        if (!(await pageExists(idGallery, pageNumber))) {
+            const filename = await downloadImage(imageURL(dom), dir);
+            await insertPage({
+                id_gallery: idGallery,
+                page_number: pageNumber,
+                filename
+            })
+            logger.debug(`Downloaded page ${pageNumber}`)
+
+        }
+        else {
+            logger.debug(`Skipped page ${pageNumber}`)
+        }
+    } catch (e) {
+        if (e === false) {
+            logger.error(`Failed downloading page [${pageNumber}].`);
+            return;
+        }
+        else {
+            throw e;
+        }
+    }
+}
+
+export async function downloadGalleryAsync(url: string, metadataOnly = false, force = false) {
+    try {
+        if (!validUrl.isWebUri(url)) {
+            logger.info(`Rejected URL [${url}]. Doing nothing.`);
+            return;
+        }
+        logger.info(`Accepted URL [${url}]. Dispatching task.`);
+        const dom = await loadURL(url);
+        const [idGallery, dir, length] = await saveGallery(dom, url);
+        await insertTask({ id_gallery: idGallery, status: TaskStatus.RUNNING });
+        if (metadataOnly) {
+            return;
+        }
+        let pageNumber = 1;
+        let currentURL = pageURL(dom, pageNumber);
+        while (true) {
+            const pageDom = await loadURL(currentURL);
+            await downloadPage(pageDom, idGallery, pageNumber, dir);
+            logger.verbose(`Done page ${pageNumber}/${length}`)
+            const nextURL = nextPageURL(pageDom);
+            if (nextURL.length === 0 || nextURL === currentURL) {
+                break;
+            }
+            pageNumber++;
+            currentURL = nextURL;
+            setTimeout(() => { }, 2000);
+        }
+        logger.info(`Task [${url}] done.`);
+    } catch (err) {
+        logger.error(err);
+    }
+}
+
+export function downloadGallery(url: string, metadataOnly = false) {
+    downloadGalleryAsync(url, metadataOnly);
+}
+
+export async function isValidImage(filepath: string): Promise<boolean> {
+    return new Promise((resolve, reject) => {
+        if (fs.existsSync(filepath)) {
+            gm(filepath).identify(result => {
+                resolve(result === null);
+            })
+        }
+        else {
+            resolve(false)
+        }
+    });
 }

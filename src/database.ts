@@ -1,9 +1,32 @@
 import knex from 'knex';
+import logger from '@logger';
+/** List galleries with mismatched length/pages
+select p.id_gallery, g.length, count(*), count(*) - g.length
+from page p join gallery g on (g.id = p.id_gallery)
+group by p.id_gallery, g.length
+having (count(*) <> g.length)
+**/
+
+export enum TaskStatus {
+    RUNNING = 'RUNNING',
+    STOPPED = 'STOPPED',
+    COMPLETED = 'COMPLETED'
+}
 
 export const pg = knex({
     client: 'pg',
-    connection: process.env.DATABASE_URL
+    connection: process.env.DATABASE_URL,
+    log: {
+        error(message: string) {
+            logger.error(message);
+        }
+    }
 });
+pg.on('query', (queryData: knex.Sql) => {
+    if (process.env.DEBUG_SQL === 'true') {
+        logger.debug(queryData.sql);
+    }
+})
 
 export const pgLegacy = knex({
     client: 'pg',
@@ -17,7 +40,17 @@ export async function listGalleriesLegacy() {
 }
 
 export async function insertGallery(g: GalleryInsert): Promise<string> {
-    return (await pg('gallery').insert(g).returning('id'))[0];
+    const insert = pg('gallery').insert(g).toString();
+    const query = `${insert} ON CONFLICT("dir") DO UPDATE SET updated = NOW() RETURNING id`;
+    return (await pg.raw(query)).rows[0].id
+}
+
+export async function insertTask(t: { id_gallery: string, status: TaskStatus }) {
+    return pg('task').insert({
+        ...t,
+        failed_pages: [],
+        messages: []
+    })
 }
 
 export async function insertTag(t: Tag): Promise<string> {
@@ -39,7 +72,7 @@ export async function insertPage(p: Page) {
 }
 
 export async function listCovers(offset: number, limit: number) {
-    return pg.raw("SELECT g.title, CONCAT('/thumbs/', g.dir, '.', p.page_number) as url, g.category, g.length FROM gallery g JOIN page p ON g.id = p.id_gallery WHERE p.page_number = 1 ORDER BY created DESC LIMIT ? OFFSET ?;", [limit, offset])
+    return pg.raw("SELECT g.title, CONCAT(g.dir, '/', p.filename) as path, g.category, g.length FROM gallery g JOIN page p ON g.id = p.id_gallery WHERE p.page_number = 1 ORDER BY created DESC LIMIT ? OFFSET ?;", [limit, offset])
 }
 
 export async function countGalleries(filter: string) {

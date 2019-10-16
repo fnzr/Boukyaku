@@ -11,8 +11,13 @@ interface GalleryInsert {
     url: string,
 }
 
+interface TaskInsert {
+    id_gallery: string,
+    status: string
+}
+
 interface Gallery {
-    id: number,
+    id: string,
     dir: string,
     title: string,
     original_title?: string,
@@ -32,7 +37,7 @@ interface Tag {
 }
 
 interface Page {
-    id_gallery: number,
+    id_gallery: string,
     page_number: number,
     filename: string
 }

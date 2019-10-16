@@ -8,12 +8,12 @@ const {
 module.exports = {
     entry: './src/index.ts',
     mode: NODE_ENV,
-    watch: NODE_ENV === 'development',
+    devtool: 'source-map',
     target: 'node',
     externals: [nodeExternals()],
     output: {
         path: path.resolve(__dirname, 'build'),
-        filename: 'index.js'
+        filename: 'index.js',
     },
     resolve: {
         extensions: ['.ts', '.js'],
